@@ -30,4 +30,4 @@ This project is an e-commerce bot integrated with a frontend for administrators.
 5. Start interacting with the bot on Telegram.
 
 ## Contact
-For any inquiries, please contact [].
+For any inquiries, please contact - Telegram: [@ravshanxonov](https://t.me/ravshanxonov).
