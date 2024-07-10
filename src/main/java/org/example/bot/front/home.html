@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Order List</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.5.0/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <style>
+        .order-container {
+            display: flex;
+            justify-content: space-between;
+        }
+        .order-column {
+            flex: 1;
+            margin: 0 10px;
+            min-height: 200px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 10px;
+            overflow-y: auto;
+            background-color: #f9f9f9;
+        }
+        .order-column h2 {
+            text-align: center;
+            background-color: #f3f3f3;
+            padding: 10px;
+            margin-top: 0;
+            border-top-left-radius: 5px;
+            border-top-right-radius: 5px;
+        }
+        .order-item {
+            border: 1px solid #ddd;
+            margin-bottom: 10px;
+            padding: 8px;
+            background-color: #fff;
+            border-radius: 5px;
+            cursor: move;
+        }
+    </style>
+</head>
+<body>
+<h1>Order List</h1>
+<div class="order-container">
+    <div class="order-column" id="create-orders">
+        <h2>CREATE</h2>
+    </div>
+    <div class="order-column" id="progress-orders">
+        <h2>PROGRESS</h2>
+    </div>
+    <div class="order-column" id="complete-orders">
+        <h2>COMPLETE</h2>
+    </div>
+</div>
+
+<script>
+    let stompClient = null;
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const socket = new SockJS('http://localhost:8080/ws-orders');
+        stompClient = Stomp.over(socket);
+
+        stompClient.connect({}, (frame) => {
+            console.log('Connected: ' + frame);
+
+            stompClient.subscribe('/topic/orders', (message) => {
+                const update = JSON.parse(message.body);
+                updateOrderInDOM(update);
+            });
+        });
+
+        fetch('http://localhost:8080/api/orders')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to fetch orders');
+                }
+                return response.json();
+            })
+            .then(orders => {
+                const createColumn = document.querySelector('#create-orders');
+                const progressColumn = document.querySelector('#progress-orders');
+                const completeColumn = document.querySelector('#complete-orders');
+
+                orders.forEach(order => {
+                    const orderItem = createOrderElement(order);
+
+                    switch (order.orderStatus) {
+                        case 'CREATE':
+                            createColumn.appendChild(orderItem);
+                            break;
+                        case 'PROGRESS':
+                            progressColumn.appendChild(orderItem);
+                            break;
+                        case 'COMPLETE':
+                            completeColumn.appendChild(orderItem);
+                            break;
+                        default:
+                            console.error(`Unknown order status: ${order.orderStatus}`);
+                    }
+                });
+
+                // Add drag and drop event listeners
+                addDragAndDropEventListeners();
+            })
+            .catch(error => console.error('Error fetching orders:', error));
+    });
+
+    function createOrderElement(order) {
+        const orderItem = document.createElement('div');
+        orderItem.classList.add('order-item');
+        orderItem.setAttribute('draggable', 'true');
+        orderItem.dataset.orderId = order.id;
+        orderItem.dataset.orderStatus = order.orderStatus;
+        orderItem.innerHTML = `
+            <p><strong>User Phone:</strong> ${order.user.phoneNumber}</p>
+            <p><strong>Total Price:</strong> ${order.totalPrice}</p>
+            <p><strong>Order Date:</strong> ${new Date(order.orderDate).toLocaleString()}</p>
+            <p><strong>Order ID:</strong> ${order.id}</p>
+        `;
+        return orderItem;
+    }
+
+    function addDragAndDropEventListeners() {
+        const orderItems = document.querySelectorAll('.order-item');
+
+        orderItems.forEach(orderItem => {
+            orderItem.addEventListener('dragstart', handleDragStart);
+            orderItem.addEventListener('dragend', handleDragEnd);
+        });
+
+        const orderColumns = document.querySelectorAll('.order-column');
+
+        orderColumns.forEach(column => {
+            column.addEventListener('dragover', handleDragOver);
+            column.addEventListener('drop', handleDrop);
+        });
+    }
+
+    function handleDragStart(event) {
+        event.dataTransfer.setData('text/plain', event.target.dataset.orderId);
+        event.dataTransfer.setData('application/order-status', event.target.dataset.orderStatus);
+    }
+
+    function handleDragEnd(event) {
+        event.preventDefault();
+    }
+
+    function handleDragOver(event) {
+        event.preventDefault();
+    }
+
+    function handleDrop(event) {
+        event.preventDefault();
+
+        const orderId = event.dataTransfer.getData('text/plain');
+        let newStatus = event.target.closest('.order-column').id.replace('-orders', '').toUpperCase();
+
+        if (!newStatus) {
+            return;
+        }
+
+        const oldStatus = document.querySelector(`.order-item[data-order-id="${orderId}"]`).dataset.orderStatus;
+
+        if (oldStatus !== newStatus) {
+            const orderItem = document.querySelector(`.order-item[data-order-id="${orderId}"]`);
+            const newColumn = document.querySelector(`#${newStatus.toLowerCase()}-orders`);
+            newColumn.appendChild(orderItem);
+
+            orderItem.dataset.orderStatus = newStatus;
+
+            stompClient.send('/app/updateOrderStatus', {}, JSON.stringify({ orderId, orderStatus: newStatus }));
+
+            let endpoint = '';
+            if (newStatus === 'COMPLETE') {
+                endpoint = `http://localhost:8080/api/orders/${orderId}/completed`;
+            } else if (newStatus === 'PROGRESS') {
+                endpoint = `http://localhost:8080/api/orders/${orderId}/inProgress`;
+            }
+
+            if (endpoint) {
+                fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ orderStatus: newStatus })
+                })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Failed to update order status');
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log('Order updated:', data);
+                    })
+                    .catch(error => console.error('Error updating order status:', error));
+            }
+        }
+    }
+
+    function updateOrderInDOM(update) {
+        const orderItem = document.querySelector(`.order-item[data-order-id="${update.id}"]`);
+        if (orderItem) {
+            const oldColumn = document.querySelector(`#${orderItem.dataset.orderStatus.toLowerCase()}-orders`);
+            const newColumn = document.querySelector(`#${update.orderStatus.toLowerCase()}-orders`);
+
+            if (oldColumn && newColumn) {
+                oldColumn.removeChild(orderItem);
+                newColumn.appendChild(orderItem);
+                orderItem.dataset.orderStatus = update.orderStatus;
+            }
+        } else {
+            const newOrderItem = createOrderElement(update);
+            const newColumn = document.querySelector(`#${update.orderStatus.toLowerCase()}-orders`);
+            newColumn.appendChild(newOrderItem);
+            addDragAndDropEventListeners();
+        }
+    }
+</script>
+</body>
+</html>
