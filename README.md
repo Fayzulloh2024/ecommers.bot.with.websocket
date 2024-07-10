@@ -1,5 +1,6 @@
 # E-commerce Bot with WebSocket
 
+
 ## Overview
 
 This project is an e-commerce bot integrated with a frontend for administrators. It uses WebSocket for real-time communication between the bot and the frontend.
